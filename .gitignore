@@ -1,0 +1,14 @@
+build/
+dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.pyd
+*.so
+*.part
+*.p2pstate.json
+*.p2pstate.json.tmp
