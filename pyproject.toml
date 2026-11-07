@@ -1,6 +1,9 @@
 [build-system]
-requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
-build-backend = "scikit_build_core.build"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Временная Python-only сборка: C++ ядро не компилируется.
+# Когда подключим настоящий _p2pcore, заменим backend на scikit-build-core (см. ARCHITECTURE.md, 4.2).
 
 [project]
 name = "p2pshare"
@@ -13,20 +16,17 @@ dependencies = [
 
 [project.optional-dependencies]
 mdns = ["zeroconf>=0.130"]
-dev  = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout", "ruff", "mypy"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout", "ruff"]
 
 [project.scripts]
 p2pshare = "p2pshare.__main__:main"
 
-[tool.scikit-build]
-minimum-version = "build-system.requires"
-cmake.version = ">=3.20"
-cmake.build-type = "Release"
-build-dir = "build/{wheel_tag}"
-wheel.packages = ["src/p2pshare"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 timeout = 60
 
