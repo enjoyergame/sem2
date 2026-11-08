@@ -12,3 +12,5 @@ venv/
 *.part
 *.p2pstate.json
 *.p2pstate.json.tmp
+.vscode/
+.claude/
