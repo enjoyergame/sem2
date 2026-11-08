@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(p2pcore LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -57,7 +57,7 @@ option(P2P_BUILD_TESTS "Build C++ unit tests" OFF)
 if(P2P_BUILD_TESTS)
     FetchContent_Declare(doctest
         GIT_REPOSITORY https://github.com/doctest/doctest.git
-        GIT_TAG        v2.4.11
+        GIT_TAG        v2.4.12
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(doctest)
     enable_testing()
