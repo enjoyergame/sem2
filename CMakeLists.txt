@@ -94,4 +94,8 @@ if(P2P_BUILD_TESTS)
     target_include_directories(p2pcore_gen_vectors PRIVATE cpp/tests)
     target_link_libraries(p2pcore_gen_vectors PRIVATE p2pcore_lib)
     target_compile_definitions(p2pcore_gen_vectors PRIVATE P2P_VECTORS_PATH="${P2P_VECTORS_FILE}")
+
+    # Замеры скорости для отчёта: размер чанка x окно запросов (см. docs/BENCH.md).
+    add_executable(p2pcore_bench cpp/tools/bench.cpp)
+    target_link_libraries(p2pcore_bench PRIVATE p2pcore_lib)
 endif()

@@ -60,6 +60,8 @@ jobs:
   # Linux: собирается file_store_posix.cpp (pread/pwrite/ftruncate) и сетевой код на epoll.
   # Второй вариант — Debug с AddressSanitizer + UndefinedBehaviorSanitizer: ловит выход за
   # границы буферов, use-after-free в обработчиках asio и UB, которые в Release не видны.
+  # Третий — ThreadSanitizer: гонки данных между потоком Python (методы Engine, wait_events)
+  # и io-потоком ядра. ASan и TSan в одной сборке несовместимы, поэтому это отдельный вариант.
   linux:
     name: Linux / GCC ${{ matrix.name }}
     runs-on: ubuntu-24.04
@@ -73,11 +75,15 @@ jobs:
           - name: ASan+UBSan
             build_type: Debug
             cxx_flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          - name: TSan
+            build_type: RelWithDebInfo  # TSan медленный: -O2 -g, а не Debug
+            cxx_flags: "-fsanitize=thread"
     env:
       CC: gcc-14
       CXX: g++-14
       ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
       UBSAN_OPTIONS: print_stacktrace=1
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
     steps:
       - uses: actions/checkout@v5
 
@@ -85,6 +91,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build g++-14
+
+      # Ядра Linux 6.x раскладывают память случайнее, чем ожидает TSan из GCC 14, и он падает
+      # при старте с "unexpected memory mapping". Уменьшаем разброс адресов до прежнего.
+      - name: Allow ThreadSanitizer memory layout
+        if: matrix.name == 'TSan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
 
       - name: Configure
         run: >
