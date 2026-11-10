@@ -66,7 +66,12 @@ struct Events {
     }
     // Ждать, пока событий типа t станет n.
     std::vector<Event> wait_count(EventType t, std::size_t n, std::chrono::milliseconds timeout = 5s) {
-        wait([&](const Event&) { return count(t) >= n; }, timeout);
+        // Считаем один раз на пачку событий, а не на каждое событие: иначе на десятках тысяч
+        // событий ожидание становится квадратичным.
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (count(t) < n && std::chrono::steady_clock::now() <= deadline) {
+            for (Event& e : engine.wait_events(20)) all.push_back(std::move(e));
+        }
         std::vector<Event> out;
         for (const Event& e : all) {
             if (e.type == t) out.push_back(e);
@@ -120,8 +125,8 @@ struct Pair {
     Events se{seeder, {}};
     Events le{leecher, {}};
 
-    explicit Pair(EngineConfig seeder_cfg = config('S', "seeder"))
-        : seeder(std::move(seeder_cfg)), leecher(config('L', "Ноутбук")), port(seeder.start()) {
+    explicit Pair(EngineConfig seeder_cfg = config('S', "seeder"), EngineConfig leecher_cfg = config('L', "Ноутбук"))
+        : seeder(std::move(seeder_cfg)), leecher(std::move(leecher_cfg)), port(seeder.start()) {
         leecher.start();
     }
 
@@ -480,4 +485,129 @@ TEST_CASE("loopback: keepalive timeout closes a silent connection") {
     CHECK(ea.count(EventType::PeerDisconnected) == 0);
     CHECK(ea.count(EventType::Pong) > 0);
     b.disconnect(c);
+}
+
+// ======================================================== таймауты запросов
+
+namespace {
+
+// Leecher с коротким таймаутом запроса. PING ходит каждые 50 мс, а таймаут тишины большой:
+// соединение заведомо живое, и сработать может только таймаут запроса.
+EngineConfig impatient_leecher(std::uint32_t request_timeout_ms) {
+    EngineConfig c = config('L', "leecher");
+    c.request_timeout_ms = request_timeout_ms;
+    c.keepalive_ms = 50;
+    c.idle_timeout_ms = 10000;
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("loopback: request timeout fails the unanswered chunk, drops the connection, retry works") {
+    TempDir dir;
+    EngineConfig seeder_cfg = config('S', "seeder");
+    seeder_cfg.fault_stall_chunk = 2;  // на REQUEST чанка 2 seeder один раз не ответит
+    Pair p(seeder_cfg, impatient_leecher(400));
+    fs::path part;
+    const std::string data = p.setup_transfer(dir, kFile, 4500, part);
+    const ConnId conn = p.connect();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    p.leecher.request_chunks(conn, kFile, range(5));
+
+    // Остальные чанки приходят как обычно: молчание по одному запросу им не мешает.
+    CHECK(p.le.wait_count(EventType::ChunkReceived, 4).size() == 4);
+
+    const Event* found = p.le.wait_type(EventType::ChunkFailed);
+    REQUIRE(found);
+    const Event failed = *found;
+    CHECK(std::chrono::steady_clock::now() - t0 >= 400ms);  // не раньше таймаута
+    CHECK(failed.conn_id == conn);
+    CHECK(failed.file_id == kFile);
+    CHECK(failed.chunk_index == 2);
+    CHECK(failed.code == static_cast<int>(FailCode::Timeout));
+
+    found = p.le.wait_type(EventType::PeerDisconnected);
+    REQUIRE(found);
+    CHECK(found->conn_id == conn);
+    CHECK(found->code == static_cast<int>(DisconnectCode::Fault));
+    CHECK(found->message == "request timeout");
+    CHECK(p.le.count(EventType::ChunkFailed) == 1);
+    CHECK(p.le.count(EventType::ChunkReceived) == 4);
+
+    // Провал чанка приходит раньше, чем PEER_DISCONNECTED.
+    const auto pos = [&](EventType t) {
+        return std::ranges::find_if(p.le.all, [t](const Event& e) { return e.type == t; }) - p.le.all.begin();
+    };
+    CHECK(pos(EventType::ChunkFailed) < pos(EventType::PeerDisconnected));
+
+    // Докачка: новое соединение, тот же чанк (сбой одноразовый).
+    p.le.clear();
+    const ConnId conn2 = p.leecher.connect("127.0.0.1", p.port);
+    p.leecher.request_chunks(conn2, kFile, {2});
+    CHECK(p.le.wait_count(EventType::ChunkReceived, 1).size() == 1);
+    CHECK(p.le.count(EventType::ChunkFailed) == 0);
+    p.leecher.close_file(kFile);
+    CHECK(read_file(part) == data);
+}
+
+TEST_CASE("loopback: on request timeout the requests not sent yet fail with DISCONNECT") {
+    TempDir dir;
+    EngineConfig seeder_cfg = config('S', "seeder");
+    seeder_cfg.fault_stall_chunk = 0;
+    EngineConfig leecher_cfg = impatient_leecher(300);
+    leecher_cfg.max_inflight = 1;  // чанк 0 занимает всё окно, чанки 1 и 2 так и не отправлены
+    Pair p(seeder_cfg, leecher_cfg);
+    fs::path part;
+    p.setup_transfer(dir, kFile, 4500, part);
+    const ConnId conn = p.connect();
+    p.leecher.request_chunks(conn, kFile, {0, 1, 2});
+
+    const std::vector<Event> failed = p.le.wait_count(EventType::ChunkFailed, 3);
+    REQUIRE(failed.size() == 3);
+    for (const Event& e : failed) {
+        CAPTURE(e.chunk_index);
+        const FailCode expected = e.chunk_index == 0 ? FailCode::Timeout : FailCode::Disconnect;
+        CHECK(e.code == static_cast<int>(expected));
+    }
+    REQUIRE(p.le.wait_type(EventType::PeerDisconnected));
+    CHECK(p.le.count(EventType::ChunkReceived) == 0);
+}
+
+TEST_CASE("loopback: request_timeout_ms = 0 switches the request timeout off") {
+    TempDir dir;
+    EngineConfig seeder_cfg = config('S', "seeder");
+    seeder_cfg.fault_stall_chunk = 0;
+    Pair p(seeder_cfg, impatient_leecher(0));
+    fs::path part;
+    p.setup_transfer(dir, kFile, 4500, part);
+    const ConnId conn = p.connect();
+    p.leecher.request_chunks(conn, kFile, {0});
+    p.le.collect_for(600ms);
+    CHECK(p.le.count(EventType::ChunkFailed) == 0);
+    CHECK(p.le.count(EventType::PeerDisconnected) == 0);
+    CHECK(p.le.count(EventType::Pong) > 0);  // соединение при этом живое
+}
+
+TEST_CASE("loopback: a long queue of requests does not time out while answers keep coming") {
+    // Вся передача идёт заметно дольше таймаута, но каждый запрос ждёт недолго: отсчёт идёт
+    // от отправки REQUEST (а не от request_chunks) и сдвигается, пока приходят ответы.
+    TempDir dir;
+    EngineConfig leecher_cfg = impatient_leecher(300);
+    leecher_cfg.max_inflight = 2;
+    Pair p(config('S', "seeder"), leecher_cfg);
+    fs::path part;
+    const std::size_t size = 30000 * kChunk;
+    const std::string data = p.setup_transfer(dir, kFile, size, part);
+    const ConnId conn = p.connect();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    p.leecher.request_chunks(conn, kFile, range(30000));
+    CHECK(p.le.wait_count(EventType::ChunkReceived, 30000, 120s).size() == 30000);
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
+    MESSAGE("30000 chunks took " << took.count() << " ms (request timeout is 300 ms)");
+    CHECK(p.le.count(EventType::ChunkFailed) == 0);
+    CHECK(p.le.count(EventType::PeerDisconnected) == 0);
+    p.leecher.close_file(kFile);
+    CHECK(read_file(part) == data);
 }

@@ -96,8 +96,10 @@ PYBIND11_MODULE(_p2pcore, m) {
         .def_readwrite("max_inflight", &EngineConfig::max_inflight)
         .def_readwrite("keepalive_ms", &EngineConfig::keepalive_ms)
         .def_readwrite("idle_timeout_ms", &EngineConfig::idle_timeout_ms)
+        .def_readwrite("request_timeout_ms", &EngineConfig::request_timeout_ms)
         .def_readwrite("fault_drop_after_bytes", &EngineConfig::fault_drop_after_bytes)
-        .def_readwrite("fault_corrupt_chunk", &EngineConfig::fault_corrupt_chunk);
+        .def_readwrite("fault_corrupt_chunk", &EngineConfig::fault_corrupt_chunk)
+        .def_readwrite("fault_stall_chunk", &EngineConfig::fault_stall_chunk);
 
     // -------------------------------------------------------------- Engine
     // file_id, have, payload — Python bytes -> std::string (двоичные данные целиком);

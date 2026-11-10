@@ -27,8 +27,13 @@ struct EngineConfig {
     std::uint32_t max_inflight = 6;               // окно запросов REQUEST на соединение
     std::uint32_t keepalive_ms = 5000;            // PING раз в столько мс (0 — выкл.)
     std::uint32_t idle_timeout_ms = 15000;        // разрыв после стольких мс тишины (0 — выкл.)
+    // Таймаут ответа на REQUEST (0 — выкл.): если за это время не пришло ни байта ответа ни на
+    // запрос, ни на отправленные раньше него — CHUNK_FAILED(TIMEOUT) и разрыв соединения.
+    // Нужен против пира, который жив (отвечает на PING), но на запросы не отвечает.
+    std::uint32_t request_timeout_ms = 30000;
     std::uint64_t fault_drop_after_bytes = 0;     // 0 = выкл.; оборвать соединение, когда отдано > N байт
     std::int64_t fault_corrupt_chunk = -1;        // -1 = выкл.; испортить чанк N (один раз, до CRC)
+    std::int64_t fault_stall_chunk = -1;          // -1 = выкл.; не ответить на REQUEST чанка N (один раз)
 };
 
 class Engine {

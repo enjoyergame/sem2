@@ -57,6 +57,7 @@ public:
     // Внедрение сбоев (на стороне отдающего, срабатывают один раз).
     virtual bool take_drop_fault(std::uint64_t chunk_len) = 0;
     virtual bool take_corrupt_fault(std::uint32_t chunk_index) = 0;
+    virtual bool take_stall_fault(std::uint32_t chunk_index) = 0;
 };
 
 class Connection : public std::enable_shared_from_this<Connection> {
@@ -94,6 +95,9 @@ private:
         std::uint32_t index = 0;
         std::shared_ptr<FileEntry> entry;
         bool cancelled = false;  // отменён, ждём ответ (CHUNK или REJECT), чтобы освободить слот
+        // С какого момента ждём ответ: время отправки REQUEST, затем — время последнего байта
+        // ответа на этот запрос или на любой, отправленный раньше него (см. note_response).
+        std::chrono::steady_clock::time_point waiting_since{};
     };
 
     // Abort — закрыть сокет сразу; SendBye — отправить BYE, закрыть свою половину (FIN) и
@@ -125,6 +129,10 @@ private:
     // --- запросы (мы качаем)
     void pump_requests();
     std::vector<Request>::iterator find_inflight(const FileId& id, std::uint32_t index);
+    // Пришла часть ответа на запрос: он и все отправленные после него ждут не зря.
+    void note_response(const FileId& id, std::uint32_t index);
+    // Есть запрос, ждущий дольше request_timeout_ms: провалить его и разорвать соединение.
+    bool check_request_timeout(std::chrono::steady_clock::time_point now);
 
     // --- жизненный цикл
     void schedule_tick();

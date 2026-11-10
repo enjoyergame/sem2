@@ -1,6 +1,7 @@
 #include "p2pcore/connection.hpp"
 
 #include <algorithm>
+#include <set>
 #include <utility>
 
 #include "p2pcore/engine.hpp"
@@ -89,20 +90,28 @@ void Connection::send_bitfield(const FileEntry& entry) {
 }
 
 void Connection::request_chunks(const std::shared_ptr<FileEntry>& entry, std::span<const std::uint32_t> indices) {
+    // Что по этому файлу уже ждёт отправки, собираем один раз. Искать по очереди для каждого
+    // индекса нельзя: запрос N чанков стоил бы N*N сравнений и надолго занимал io-поток
+    // (30000 чанков — полсекунды, за которые не отвечаем даже на PING).
+    std::set<std::uint32_t> queued;
+    for (const Request& r : pending_) {
+        if (r.id == entry->id) queued.insert(r.index);
+    }
     for (const std::uint32_t index : indices) {
-        const bool pending = std::ranges::any_of(
-            pending_, [&](const Request& r) { return r.id == entry->id && r.index == index; });
-        const auto it = find_inflight(entry->id, index);
-        if (pending || (it != inflight_.end() && !it->cancelled)) continue;  // уже запрошен
-        pending_.push_back(Request{entry->id, index, entry, false});
+        const auto it = find_inflight(entry->id, index);  // inflight_ не больше окна — поиск дешёвый
+        if (it != inflight_.end() && !it->cancelled) continue;  // уже запрошен, ответ ещё не пришёл
+        if (!queued.insert(index).second) continue;             // уже в очереди
+        pending_.push_back(Request{entry->id, index, entry, false, {}});
     }
     pump_requests();
 }
 
 void Connection::cancel_chunks(const FileId& id, std::span<const std::uint32_t> indices) {
-    for (const std::uint32_t index : indices) {
-        // ещё не отправленные просто забываем
-        std::erase_if(pending_, [&](const Request& r) { return r.id == id && r.index == index; });
+    // Множество — чтобы пройти очередь один раз, а не по разу на каждый индекс (см. request_chunks).
+    const std::set<std::uint32_t> wanted(indices.begin(), indices.end());
+    // ещё не отправленные просто забываем
+    std::erase_if(pending_, [&](const Request& r) { return r.id == id && wanted.contains(r.index); });
+    for (const std::uint32_t index : wanted) {
         // отправленные помечаем: ответ (CHUNK или REJECT) всё равно придёт и освободит слот
         const auto it = find_inflight(id, index);
         if (it != inflight_.end() && !it->cancelled) {
@@ -236,6 +245,7 @@ void Connection::on_hello(std::span<const std::uint8_t> payload) {
 // ------------------------------------------------- отдача: входящие REQUEST
 
 void Connection::on_request(const FrameHeader& h) {
+    if (host_.take_stall_fault(h.chunk_index)) return;  // внедрённый сбой: запрос «потерялся», ответа не будет
     const auto& files = host_.files();
     const auto it = files.find(h.file_id);
     if (it == files.end()) return queue_reject(h, std::to_underlying(RejectReason::UnknownFile));
@@ -268,6 +278,7 @@ void Connection::on_reject(const FrameHeader& h, std::span<const std::uint8_t> p
     const auto it = find_inflight(h.file_id, h.chunk_index);
     if (it == inflight_.end()) return;  // ответ на то, чего мы уже не ждём
     const bool cancelled = it->cancelled;
+    note_response(h.file_id, h.chunk_index);
     inflight_.erase(it);
     if (!cancelled) emit_chunk_event(EventType::ChunkFailed, h.file_id, h.chunk_index, fail_code_for_reject(reason));
     pump_requests();
@@ -277,6 +288,7 @@ void Connection::begin_chunk(const FrameHeader& h) {
     const auto it = find_inflight(h.file_id, h.chunk_index);
     if (it == inflight_.end()) return protocol_error("unsolicited CHUNK");
     if (h.payload_len != it->entry->chunk_length(h.chunk_index)) return protocol_error("CHUNK length mismatch");
+    note_response(h.file_id, h.chunk_index);
     rx_chunk_ = RxChunk{};
     rx_chunk_.entry = it->entry;
     rx_chunk_.offset = it->entry->chunk_offset(h.chunk_index);
@@ -301,6 +313,7 @@ void Connection::on_chunk_slice(const asio::error_code& ec, std::size_t n) {
     if (ec) return on_io_error(ec);
     last_recv_ = Clock::now();
 
+    note_response(rx_header_.file_id, rx_header_.chunk_index);
     const std::span<const std::uint8_t> slice(rx_slice_.data(), n);
     rx_chunk_.crc.update(slice);
     FileEntry& entry = *rx_chunk_.entry;
@@ -530,6 +543,7 @@ void Connection::pump_requests() {
         h.file_id = it->id;
         h.chunk_index = it->index;
         queue_frame(h, {});
+        it->waiting_since = Clock::now();  // отсчёт таймаута — от отправки, а не от постановки в очередь
         inflight_.push_back(std::move(*it));
         it = pending_.erase(it);
     }
@@ -539,6 +553,38 @@ std::vector<Connection::Request>::iterator Connection::find_inflight(const FileI
     return std::ranges::find_if(inflight_, [&](const Request& r) { return r.id == id && r.index == index; });
 }
 
+// Отдающий шлёт чанки в порядке запросов, поэтому пока идёт ответ на более ранний запрос,
+// более поздние ждут в его очереди законно — их отсчёт сдвигаем тоже. Обратное неверно:
+// ответы на поздние запросы не оправдывают молчания по раннему.
+void Connection::note_response(const FileId& id, std::uint32_t index) {
+    const auto now = Clock::now();
+    for (auto it = find_inflight(id, index); it != inflight_.end(); ++it) it->waiting_since = now;
+}
+
+bool Connection::check_request_timeout(Clock::time_point now) {
+    const auto limit = std::chrono::milliseconds(host_.config().request_timeout_ms);
+    const auto expired = [&](const Request& r) { return now - r.waiting_since >= limit; };
+    if (std::ranges::none_of(inflight_, expired)) return false;
+
+    // Просроченные запросы проваливаем с TIMEOUT; остальные получат DISCONNECT в finish().
+    for (const Request& r : inflight_) {
+        if (expired(r) && !r.cancelled) {
+            emit_chunk_event(EventType::ChunkFailed, r.id, r.index, static_cast<int>(FailCode::Timeout));
+        }
+    }
+    std::erase_if(inflight_, expired);
+
+    Event ev;
+    ev.type = EventType::Log;
+    ev.code = static_cast<int>(LogLevel::Warning);
+    ev.conn_id = id_;
+    ev.message = "request timeout: no response for " + std::to_string(limit.count()) + " ms";
+    host_.emit(std::move(ev));
+    // На каждый REQUEST обязан прийти ответ; пир, который молчит, нарушил протокол — разрыв.
+    finish(DisconnectCode::Fault, "request timeout", CloseMode::Abort, true);
+    return true;
+}
+
 // ======================================================== жизненный цикл
 
 void Connection::schedule_tick() {
@@ -546,6 +592,7 @@ void Connection::schedule_tick() {
     std::uint32_t base = 1000;
     if (cfg.keepalive_ms > 0) base = std::min(base, cfg.keepalive_ms);
     if (cfg.idle_timeout_ms > 0) base = std::min(base, cfg.idle_timeout_ms);
+    if (cfg.request_timeout_ms > 0) base = std::min(base, cfg.request_timeout_ms);
     const auto period = std::chrono::milliseconds(std::clamp<std::uint32_t>(base / 4, 10, 1000));
     tick_timer_.expires_after(period);
     tick_timer_.async_wait([self = shared_from_this()](const asio::error_code& ec) {
@@ -560,6 +607,7 @@ void Connection::on_tick() {
     if (cfg.idle_timeout_ms > 0 && now - last_recv_ >= std::chrono::milliseconds(cfg.idle_timeout_ms)) {
         return finish(DisconnectCode::Fault, "keepalive timeout", CloseMode::Abort, true);
     }
+    if (cfg.request_timeout_ms > 0 && check_request_timeout(now)) return;
     if (cfg.keepalive_ms > 0 && now - last_ping_ >= std::chrono::milliseconds(cfg.keepalive_ms)) send_ping();
     schedule_tick();
 }

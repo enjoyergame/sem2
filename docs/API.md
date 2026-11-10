@@ -24,7 +24,10 @@ C++-тесты: `cmake -S . -B build/tests -G Ninja -DP2P_BUILD_TESTS=ON`, за�
 
 `EngineConfig()` — поля: `peer_id: bytes` (ровно 16, иначе `ValueError`), `name: str`,
 `max_inflight` (6), `keepalive_ms` (5000), `idle_timeout_ms` (15000),
-`fault_drop_after_bytes` (0 — выкл.), `fault_corrupt_chunk` (-1 — выкл.).
+`request_timeout_ms` (30000; 0 — выкл.) — таймаут ответа на `REQUEST`, см. ниже,
+`fault_drop_after_bytes` (0 — выкл.), `fault_corrupt_chunk` (-1 — выкл.),
+`fault_stall_chunk` (-1 — выкл.) — отдающий один раз не отвечает на `REQUEST` чанка N
+(для проверки таймаута запроса).
 
 `Engine(config)` — методы как у `FakeEngine`. Все методы, которые могут ждать, отпускают GIL.
 Синхронные ошибки — `P2PError` (наследник `RuntimeError`, тот же класс подхватывает
@@ -75,7 +78,7 @@ C++-тесты: `cmake -S . -B build/tests -G Ninja -DP2P_BUILD_TESTS=ON`, за�
 - `PEER_DISCONNECTED.code`: 0 `DISCONNECT_LOCAL`, 1 `DISCONNECT_REMOTE` (пришёл `BYE`),
   2 `DISCONNECT_FAULT` (обрыв, таймаут, нарушение протокола);
 - `CHUNK_FAILED.code`: 1 `UNKNOWN_FILE`, 2 `NOT_HAVE`, 3 `BUSY`, 4 `CRC`, 5 `DISCONNECT`,
-  6 `TIMEOUT` (пока не возникает), **7 `DISK`** — не удалось записать в `.part`
+  6 `TIMEOUT` — на `REQUEST` не ответили за `request_timeout_ms`, **7 `DISK`** — не удалось записать в `.part`
   (**нового кода нет в `codes.py`**: Python должен считать незнакомый код обычным провалом);
 - `PROGRESS.value`: 0 `DIR_DOWNLOAD`, 1 `DIR_UPLOAD`.
 
@@ -93,5 +96,11 @@ Python-код, который работает с обоими движками,
 4. **Провалы при разрыве** (`CHUNK_FAILED`, код 5) приходят раньше `PEER_DISCONNECTED`.
 5. **`cancel_chunks` событий не даёт**; повторный запрос того же чанка, пока он «в полёте», игнорируется.
 6. **`set_rate_limit` пока только запоминает значения** (как и FakeEngine); ограничение — этап 4.
+7. **Таймаут запроса.** Если пир жив (отвечает на `PING`), но за `request_timeout_ms` не прислал
+   ни байта ответа на `REQUEST`, приходят: `CHUNK_FAILED` с кодом 6 `TIMEOUT` для зависших
+   запросов, `CHUNK_FAILED` с кодом 5 `DISCONNECT` для остальных запросов этого соединения,
+   затем `PEER_DISCONNECTED` (`FAULT`, `message` = `"request timeout"`). Соединение закрыто:
+   чанки нужно вернуть в очередь и запросить заново (у другого пира или после переподключения).
+   В FakeEngine полей `request_timeout_ms` и `fault_stall_chunk` нет.
 7. **Подключение к самому себе** отклоняется с `P2PError` и без событий.
 8. **После `close_file`** файл закрыт сразу: на Windows `.part` можно переименовать.

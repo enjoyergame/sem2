@@ -89,6 +89,7 @@ struct Engine::Impl final : ConnectionHost {
     void count_transfer(const FileId& id, Direction dir, std::uint64_t bytes) override;
     bool take_drop_fault(std::uint64_t chunk_len) override;
     bool take_corrupt_fault(std::uint32_t chunk_index) override;
+    bool take_stall_fault(std::uint32_t chunk_index) override;
 
     // Порядок важен: всё, что держит сокеты и таймеры, объявлено после io_ и
     // уничтожается раньше него.
@@ -119,6 +120,7 @@ struct Engine::Impl final : ConnectionHost {
     std::uint64_t bytes_received_ = 0;
     std::uint64_t drop_after_ = 0;
     std::int64_t corrupt_chunk_ = -1;
+    std::int64_t stall_chunk_ = -1;
     std::uint64_t upload_bps_ = 0;
     std::uint64_t download_bps_ = 0;
 };
@@ -131,6 +133,7 @@ Engine::Impl::Impl(EngineConfig cfg)
     std::copy(cfg_.peer_id.begin(), cfg_.peer_id.end(), peer_id_.begin());
     drop_after_ = cfg_.fault_drop_after_bytes;
     corrupt_chunk_ = cfg_.fault_corrupt_chunk;
+    stall_chunk_ = cfg_.fault_stall_chunk;
     thread_ = std::thread([this] { io_.run(); });
 }
 
@@ -310,6 +313,12 @@ bool Engine::Impl::take_drop_fault(std::uint64_t chunk_len) {
 bool Engine::Impl::take_corrupt_fault(std::uint32_t chunk_index) {
     if (corrupt_chunk_ < 0 || static_cast<std::int64_t>(chunk_index) != corrupt_chunk_) return false;
     corrupt_chunk_ = -1;  // портим один раз, чтобы повторный запрос получил целый чанк
+    return true;
+}
+
+bool Engine::Impl::take_stall_fault(std::uint32_t chunk_index) {
+    if (stall_chunk_ < 0 || static_cast<std::int64_t>(chunk_index) != stall_chunk_) return false;
+    stall_chunk_ = -1;  // молчим один раз, чтобы повторный запрос после таймаута получил ответ
     return true;
 }
 
