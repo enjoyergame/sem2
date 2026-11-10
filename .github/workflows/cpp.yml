@@ -83,7 +83,9 @@ jobs:
       CXX: g++-14
       ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
       UBSAN_OPTIONS: print_stacktrace=1
-      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+      # halt_on_error=0: сообщить обо всех гонках за один прогон (тест всё равно упадёт с кодом 66).
+      # Подавления ложных срабатываний из-за неинструментированной libstdc++ — в tsan.supp.
+      TSAN_OPTIONS: halt_on_error=0:second_deadlock_stack=1:suppressions=${{ github.workspace }}/cpp/tests/tsan.supp
     steps:
       - uses: actions/checkout@v5
 
