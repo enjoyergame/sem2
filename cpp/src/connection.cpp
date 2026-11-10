@@ -35,6 +35,8 @@ Connection::Connection(asio::ip::tcp::socket socket, ConnId id, bool incoming, C
       handshake_timer_(socket_.get_executor()),
       tick_timer_(socket_.get_executor()),
       close_timer_(socket_.get_executor()),
+      rx_throttle_timer_(socket_.get_executor()),
+      tx_throttle_timer_(socket_.get_executor()),
       host_(host),
       id_(id),
       incoming_(incoming),
@@ -296,13 +298,31 @@ void Connection::begin_chunk(const FrameHeader& h) {
     read_chunk_slice();
 }
 
+// Лимит на приём: не читаем следующую порцию, пока не разрешит ведро. Так ограничение скорости
+// загрузки работает, даже если у отдающего лимита нет.
 void Connection::read_chunk_slice() {
     if (rx_chunk_.remaining == 0) return end_chunk();
-    const std::size_t n = std::min<std::size_t>(rx_chunk_.remaining, kSliceSize);
-    asio::async_read(socket_, asio::buffer(rx_slice_.data(), n),
-                     [self = shared_from_this(), n](const asio::error_code& ec, std::size_t) {
-                         self->on_chunk_slice(ec, n);
-                     });
+    const std::size_t n =
+        std::min<std::size_t>({rx_chunk_.remaining, kSliceSize, host_.slice_size(Direction::Download)});
+    // Ведро уже списало прошлую порцию и сказало, до какого момента ждать. При закрытии
+    // дочитываем кадр без лимита: эти байты уже никому не нужны.
+    if (closed_ || Clock::now() >= rx_resume_at_) return read_chunk_slice_now(n);
+    rx_throttle_timer_.expires_at(rx_resume_at_);
+    rx_throttle_timer_.async_wait([self = shared_from_this(), n](const asio::error_code& ec) {
+        if (ec || self->socket_closed_) return;  // отменён в close_socket
+        self->read_chunk_slice_now(n);
+    });
+}
+
+// async_read_some, а не async_read: операция завершается на любой пришедшей порции, а не
+// только когда пришли все n байт. При медленном отдающем каждая порция сразу обновляет
+// время последнего приёма и отсчёт таймаута запроса — иначе чанк, идущий дольше таймаута,
+// считался бы зависшим, хотя байты идут.
+void Connection::read_chunk_slice_now(std::size_t n) {
+    socket_.async_read_some(asio::buffer(rx_slice_.data(), n),
+                            [self = shared_from_this()](const asio::error_code& ec, std::size_t got) {
+                                self->on_chunk_slice(ec, got);
+                            });
 }
 
 void Connection::on_chunk_slice(const asio::error_code& ec, std::size_t n) {
@@ -312,6 +332,9 @@ void Connection::on_chunk_slice(const asio::error_code& ec, std::size_t n) {
     }
     if (ec) return on_io_error(ec);
     last_recv_ = Clock::now();
+    // Лимит на приём считаем по фактически прочитанным байтам; ждать — перед следующим чтением.
+    // Непрочитанное копится в буфере ОС, окно TCP закрывается, и отдающий замедляется сам.
+    rx_resume_at_ = last_recv_ + host_.throttle(Direction::Download, n);
 
     note_response(rx_header_.file_id, rx_header_.chunk_index);
     const std::span<const std::uint8_t> slice(rx_slice_.data(), n);
@@ -495,7 +518,23 @@ void Connection::write_chunk_slice() {
         writing_ = false;
         return write_next();
     }
-    const std::size_t n = std::min<std::size_t>(t.remaining, kSliceSize);
+    const std::size_t n = std::min<std::size_t>({t.remaining, kSliceSize, host_.slice_size(Direction::Upload)});
+    // Лимит на отдачу: ждём до чтения с диска, чтобы во время ожидания не держать данные.
+    // writing_ остаётся true: середину кадра CHUNK нельзя перебить другим кадром.
+    const auto wait = host_.throttle(Direction::Upload, n);
+    if (wait == std::chrono::nanoseconds::zero()) return send_chunk_slice(n);
+    tx_throttle_timer_.expires_after(wait);
+    tx_throttle_timer_.async_wait([self = shared_from_this(), n](const asio::error_code& ec) {
+        if (ec || self->socket_closed_) {
+            self->writing_ = false;
+            return;
+        }
+        self->send_chunk_slice(n);
+    });
+}
+
+void Connection::send_chunk_slice(std::size_t n) {
+    TxChunk& t = tx_chunk_;
     const std::span<std::uint8_t> slice(tx_slice_.data(), n);
     std::size_t got = 0;
     try {
@@ -681,6 +720,8 @@ void Connection::close_socket() noexcept {
     handshake_timer_.cancel();
     tick_timer_.cancel();
     close_timer_.cancel();
+    rx_throttle_timer_.cancel();
+    tx_throttle_timer_.cancel();
     host_.on_socket_closed(*this);
 }
 

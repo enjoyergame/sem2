@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "p2pcore/connection.hpp"
+#include "p2pcore/rate_limiter.hpp"
 
 namespace p2p {
 namespace {
@@ -87,6 +88,13 @@ struct Engine::Impl final : ConnectionHost {
     void on_closed(Connection& c, DisconnectCode code, const std::string& reason, bool notify) override;
     void on_socket_closed(Connection& c) override;
     void count_transfer(const FileId& id, Direction dir, std::uint64_t bytes) override;
+    std::chrono::nanoseconds throttle(Direction dir, std::size_t n) override {
+        return bucket(dir).take(n, std::chrono::steady_clock::now());
+    }
+    std::size_t slice_size(Direction dir) const override {
+        return (dir == Direction::Upload ? upload_ : download_).slice_size(kSliceSize);
+    }
+    TokenBucket& bucket(Direction dir) { return dir == Direction::Upload ? upload_ : download_; }
     bool take_drop_fault(std::uint64_t chunk_len) override;
     bool take_corrupt_fault(std::uint32_t chunk_index) override;
     bool take_stall_fault(std::uint32_t chunk_index) override;
@@ -121,8 +129,9 @@ struct Engine::Impl final : ConnectionHost {
     std::uint64_t drop_after_ = 0;
     std::int64_t corrupt_chunk_ = -1;
     std::int64_t stall_chunk_ = -1;
-    std::uint64_t upload_bps_ = 0;
-    std::uint64_t download_bps_ = 0;
+    // Лимиты скорости: одно ведро на направление, общее для всех соединений.
+    TokenBucket upload_;
+    TokenBucket download_;
 };
 
 // ====================================================================== Impl
@@ -500,8 +509,9 @@ void Engine::close_file(const std::string& file_id) {
 
 void Engine::set_rate_limit(std::uint64_t upload_bps, std::uint64_t download_bps) {
     impl_->call([&] {
-        impl_->upload_bps_ = upload_bps;
-        impl_->download_bps_ = download_bps;
+        const auto now = std::chrono::steady_clock::now();
+        impl_->upload_.set_rate(upload_bps, now);
+        impl_->download_.set_rate(download_bps, now);
     });
 }
 
@@ -520,6 +530,8 @@ std::map<std::string, std::int64_t> Engine::stats() {
             {"files", static_cast<std::int64_t>(impl_->files_.size())},
             {"bytes_sent", static_cast<std::int64_t>(impl_->bytes_sent_)},
             {"bytes_received", static_cast<std::int64_t>(impl_->bytes_received_)},
+            {"upload_limit", static_cast<std::int64_t>(impl_->upload_.rate())},
+            {"download_limit", static_cast<std::int64_t>(impl_->download_.rate())},
         };
     });
 }

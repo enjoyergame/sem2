@@ -54,6 +54,10 @@ public:
     virtual void on_socket_closed(Connection& c) = 0;
 
     virtual void count_transfer(const FileId& id, Direction dir, std::uint64_t bytes) = 0;
+    // Ограничение скорости (общее для всех соединений движка). Перед передачей n байт данных
+    // чанка: сколько подождать (0 — можно сразу). Порцию берите не больше slice_size(dir).
+    [[nodiscard]] virtual std::chrono::nanoseconds throttle(Direction dir, std::size_t n) = 0;
+    [[nodiscard]] virtual std::size_t slice_size(Direction dir) const = 0;
     // Внедрение сбоев (на стороне отдающего, срабатывают один раз).
     virtual bool take_drop_fault(std::uint64_t chunk_len) = 0;
     virtual bool take_corrupt_fault(std::uint32_t chunk_index) = 0;
@@ -115,6 +119,7 @@ private:
     void on_cancel(const FrameHeader& h);
     void begin_chunk(const FrameHeader& h);
     void read_chunk_slice();
+    void read_chunk_slice_now(std::size_t n);
     void on_chunk_slice(const asio::error_code& ec, std::size_t n);
     void end_chunk();
     void drain();
@@ -125,6 +130,7 @@ private:
     void write_next();
     void start_chunk_job(ChunkJob job);
     void write_chunk_slice();
+    void send_chunk_slice(std::size_t n);
 
     // --- запросы (мы качаем)
     void pump_requests();
@@ -148,6 +154,9 @@ private:
     asio::steady_timer handshake_timer_;
     asio::steady_timer tick_timer_;
     asio::steady_timer close_timer_;
+    // Ожидание по лимиту скорости: отдельно для приёма и отдачи, они идут одновременно.
+    asio::steady_timer rx_throttle_timer_;
+    asio::steady_timer tx_throttle_timer_;
     ConnectionHost& host_;
     const ConnId id_;
     const bool incoming_;
@@ -193,6 +202,7 @@ private:
 
     std::chrono::steady_clock::time_point last_recv_{};
     std::chrono::steady_clock::time_point last_ping_{};
+    std::chrono::steady_clock::time_point rx_resume_at_{};  // лимит приёма: раньше не читать данные чанка
 };
 
 }  // namespace p2p

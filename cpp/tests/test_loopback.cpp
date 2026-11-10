@@ -131,13 +131,14 @@ struct Pair {
     }
 
     // Раздать файл на seeder и открыть его загрузку на leecher.
-    std::string setup_transfer(const TempDir& dir, const std::string& file_id, std::size_t size, fs::path& part) {
+    std::string setup_transfer(const TempDir& dir, const std::string& file_id, std::size_t size, fs::path& part,
+                               std::uint32_t chunk = kChunk) {
         const std::string data = random_bytes(size, 42);
         const fs::path src = dir.path / u8"исходный.bin";
         write_file(src, data);
         part = dir.path / u8"загрузка" / "dst.part";  // папки ещё нет — open_download создаст
-        seeder.share_file(file_id, src, size, kChunk);
-        leecher.open_download(file_id, part, size, kChunk, empty_bitfield(size, kChunk));
+        seeder.share_file(file_id, src, size, chunk);
+        leecher.open_download(file_id, part, size, chunk, empty_bitfield(size, chunk));
         return data;
     }
 
@@ -606,6 +607,154 @@ TEST_CASE("loopback: a long queue of requests does not time out while answers ke
     CHECK(p.le.wait_count(EventType::ChunkReceived, 30000, 120s).size() == 30000);
     const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
     MESSAGE("30000 chunks took " << took.count() << " ms (request timeout is 300 ms)");
+    CHECK(p.le.count(EventType::ChunkFailed) == 0);
+    CHECK(p.le.count(EventType::PeerDisconnected) == 0);
+    p.leecher.close_file(kFile);
+    CHECK(read_file(part) == data);
+}
+
+// ======================================================== ограничение скорости
+
+namespace {
+
+constexpr std::uint32_t KiB = 1024;
+constexpr std::uint32_t kBigChunk = 64 * KiB;
+constexpr double kBurst = 256.0 * KiB;  // TokenBucket::kDefaultBurst
+
+double seconds_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// Нижняя граница времени передачи total байт при лимите rate: первые burst байт бесплатны,
+// последняя порция (до 64 КиБ) может уйти без ожидания; ещё 5 % — на точность таймеров ОС.
+// Верхнюю границу ставим с большим запасом: на CI (Debug + санитайзеры) машина медленнее,
+// а лимит гарантирует только минимум.
+double min_seconds(double total, double rate) { return 0.95 * (total - kBurst - 64.0 * KiB) / rate; }
+
+}  // namespace
+
+TEST_CASE("rate limit: upload limit on the seeder slows the transfer down to the limit") {
+    TempDir dir;
+    Pair p;
+    fs::path part;
+    const std::size_t size = 1024 * KiB;
+    const std::string data = p.setup_transfer(dir, kFile, size, part, kBigChunk);
+    const double rate = 512.0 * KiB;
+    p.seeder.set_rate_limit(static_cast<std::uint64_t>(rate), 0);
+    CHECK(p.seeder.stats().at("upload_limit") == static_cast<std::int64_t>(rate));
+    const ConnId conn = p.connect();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    p.leecher.request_chunks(conn, kFile, range(16));
+    REQUIRE(p.le.wait_count(EventType::ChunkReceived, 16, 30s).size() == 16);
+    const double took = seconds_since(t0);
+    MESSAGE("1 MiB at 512 KiB/s took " << took << " s, minimum " << min_seconds(size, rate) << " s");
+    CHECK(took >= min_seconds(size, rate));
+    CHECK(took < 10.0);
+    CHECK(p.le.count(EventType::ChunkFailed) == 0);
+    p.leecher.close_file(kFile);
+    CHECK(read_file(part) == data);
+}
+
+TEST_CASE("rate limit: download limit on the leecher works without any limit on the seeder") {
+    TempDir dir;
+    Pair p;
+    fs::path part;
+    const std::size_t size = 1024 * KiB;
+    const std::string data = p.setup_transfer(dir, kFile, size, part, kBigChunk);
+    const double rate = 512.0 * KiB;
+    p.leecher.set_rate_limit(0, static_cast<std::uint64_t>(rate));
+    const ConnId conn = p.connect();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    p.leecher.request_chunks(conn, kFile, range(16));
+    REQUIRE(p.le.wait_count(EventType::ChunkReceived, 16, 30s).size() == 16);
+    const double took = seconds_since(t0);
+    MESSAGE("1 MiB with 512 KiB/s download limit took " << took << " s");
+    CHECK(took >= min_seconds(size, rate));
+    CHECK(took < 10.0);
+    p.leecher.close_file(kFile);
+    CHECK(read_file(part) == data);
+}
+
+TEST_CASE("rate limit: the upload limit is shared by all connections of the engine") {
+    // Два получателя качают одновременно: вместе они не быстрее лимита отдающего.
+    TempDir dir;
+    Pair p;
+    fs::path part;
+    const std::size_t size = 768 * KiB;
+    const std::string data = p.setup_transfer(dir, kFile, size, part, kBigChunk);
+    const double rate = 768.0 * KiB;
+    p.seeder.set_rate_limit(static_cast<std::uint64_t>(rate), 0);
+
+    Engine second(config('M', "second"));
+    second.start();
+    Events se2{second, {}};
+    const fs::path part2 = dir.path / "second.part";
+    second.open_download(kFile, part2, size, kBigChunk, empty_bitfield(size, kBigChunk));
+
+    const ConnId conn = p.connect();
+    const ConnId conn2 = second.connect("127.0.0.1", p.port);
+    REQUIRE(se2.wait_type(EventType::PeerConnected));
+
+    const auto t0 = std::chrono::steady_clock::now();
+    p.leecher.request_chunks(conn, kFile, range(12));
+    second.request_chunks(conn2, kFile, range(12));
+    REQUIRE(p.le.wait_count(EventType::ChunkReceived, 12, 30s).size() == 12);
+    REQUIRE(se2.wait_count(EventType::ChunkReceived, 12, 30s).size() == 12);
+    const double took = seconds_since(t0);
+    MESSAGE("2 x 768 KiB at a shared 768 KiB/s took " << took << " s");
+    CHECK(took >= min_seconds(2.0 * size, rate));
+    CHECK(took < 12.0);
+    p.leecher.close_file(kFile);
+    second.close_file(kFile);
+    CHECK(read_file(part) == data);
+    CHECK(read_file(part2) == data);
+}
+
+TEST_CASE("rate limit: lifting the limit speeds up a transfer that is already running") {
+    TempDir dir;
+    Pair p;
+    fs::path part;
+    const std::size_t size = 2048 * KiB;
+    const std::string data = p.setup_transfer(dir, kFile, size, part, kBigChunk);
+    p.seeder.set_rate_limit(64 * KiB, 0);  // так 2 МиБ шли бы почти 30 секунд
+    const ConnId conn = p.connect();
+
+    const auto t0 = std::chrono::steady_clock::now();
+    p.leecher.request_chunks(conn, kFile, range(32));
+    p.le.collect_for(500ms);
+    const std::size_t early = p.le.count(EventType::ChunkReceived);
+    CHECK(early < 32);  // за полсекунды при лимите всё не пришло
+    p.seeder.set_rate_limit(0, 0);
+    CHECK(p.seeder.stats().at("upload_limit") == 0);
+    REQUIRE(p.le.wait_count(EventType::ChunkReceived, 32, 30s).size() == 32);
+    const double took = seconds_since(t0);
+    MESSAGE("received " << early << " chunks while limited; whole file took " << took << " s");
+    CHECK(took < 10.0);
+    p.leecher.close_file(kFile);
+    CHECK(read_file(part) == data);
+}
+
+TEST_CASE("rate limit: a slow but steady transfer does not trip the request or idle timeout") {
+    // 8 КиБ/с, чанки по 8 КиБ: один чанк идёт около секунды — дольше обоих таймаутов (400 мс).
+    // Порции по 1 КиБ приходят 8 раз в секунду, поэтому соединение и запросы не считаются зависшими.
+    TempDir dir;
+    EngineConfig leecher_cfg = config('L', "leecher");
+    leecher_cfg.request_timeout_ms = 400;
+    leecher_cfg.idle_timeout_ms = 400;
+    leecher_cfg.keepalive_ms = 50;
+    Pair p(config('S', "seeder"), leecher_cfg);
+    fs::path part;
+    const std::uint32_t chunk = 8 * KiB;
+    const std::size_t size = 256 * KiB + 2 * chunk;  // сверх burst — два чанка, около 2 с под лимитом
+    const std::string data = p.setup_transfer(dir, kFile, size, part, chunk);
+    p.seeder.set_rate_limit(8 * KiB, 0);
+    const ConnId conn = p.connect();
+
+    const auto count = static_cast<std::uint32_t>(size / chunk);
+    p.leecher.request_chunks(conn, kFile, range(count));
+    REQUIRE(p.le.wait_count(EventType::ChunkReceived, count, 30s).size() == count);
     CHECK(p.le.count(EventType::ChunkFailed) == 0);
     CHECK(p.le.count(EventType::PeerDisconnected) == 0);
     p.leecher.close_file(kFile);

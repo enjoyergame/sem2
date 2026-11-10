@@ -65,7 +65,8 @@ public:
     void flush(const std::string& file_id);
     void close_file(const std::string& file_id);
 
-    // Лимиты скорости пока только запоминаются (как в FakeEngine); token bucket — этап 4.
+    // Общие лимиты скорости данных чанков, байт/с; 0 — без ограничения. Действуют сразу, в том
+    // числе на идущие передачи. Значения меньше 1 КиБ/с поднимаются до 1 КиБ/с.
     void set_rate_limit(std::uint64_t upload_bps, std::uint64_t download_bps);
 
     std::vector<Event> poll_events(std::size_t max_events = 512);
