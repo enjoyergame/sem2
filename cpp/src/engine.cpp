@@ -69,7 +69,9 @@ struct Engine::Impl final : ConnectionHost {
     std::uint16_t do_start(std::uint16_t port);
     void do_stop();
     std::future<ConnId> begin_connect(const std::string& host, std::uint16_t port, int timeout_ms);
-    void fail_connect(const std::shared_ptr<ConnectOp>& op, const std::string& message);
+    // op — по значению, не по ссылке: вызывающий может передать connecting_[id] прямо из map,
+    // а fail_connect этот элемент удаляет — ссылка повисла бы (ASan: heap-use-after-free).
+    void fail_connect(std::shared_ptr<ConnectOp> op, const std::string& message);
     void accept_next();
     void schedule_progress();
     void emit_progress();
@@ -229,7 +231,7 @@ std::future<ConnId> Engine::Impl::begin_connect(const std::string& host, std::ui
     return fut;
 }
 
-void Engine::Impl::fail_connect(const std::shared_ptr<ConnectOp>& op, const std::string& message) {
+void Engine::Impl::fail_connect(std::shared_ptr<ConnectOp> op, const std::string& message) {
     if (op->done) return;
     op->done = true;
     connecting_.erase(op->id);

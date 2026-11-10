@@ -36,7 +36,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -79,7 +79,7 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
       UBSAN_OPTIONS: print_stacktrace=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install tools
         run: |
