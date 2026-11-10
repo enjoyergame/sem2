@@ -1,0 +1,100 @@
+# Сборка C++ ядра и его тестов (doctest через ctest) на Windows и Linux.
+# Python-часть здесь не собирается: только p2pcore_lib + p2pcore_tests.
+name: C++ core
+
+on:
+  push:
+    branches: [main, development, "cpp/**"]
+    paths:
+      - "cpp/**"
+      - "CMakeLists.txt"
+      - "tests/vectors/**"
+      - ".github/workflows/cpp.yml"
+  pull_request:
+    paths:
+      - "cpp/**"
+      - "CMakeLists.txt"
+      - "tests/vectors/**"
+      - ".github/workflows/cpp.yml"
+  workflow_dispatch:
+
+# Новый пуш в ту же ветку отменяет ещё идущую проверку старого.
+concurrency:
+  group: cpp-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Windows: тот же тулчейн, что и на машине разработчика — MinGW-w64 GCC (MSYS2 UCRT64).
+  # Собирается file_store_win32.cpp.
+  windows-mingw:
+    name: Windows / MinGW GCC
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DP2P_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 300
+
+  # Linux: собирается file_store_posix.cpp (pread/pwrite/ftruncate) и сетевой код на epoll.
+  # Второй вариант — Debug с AddressSanitizer + UndefinedBehaviorSanitizer: ловит выход за
+  # границы буферов, use-after-free в обработчиках asio и UB, которые в Release не видны.
+  linux:
+    name: Linux / GCC ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Release
+            build_type: Release
+            cxx_flags: ""
+          - name: ASan+UBSan
+            build_type: Debug
+            cxx_flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build g++-14
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }}"
+          -DP2P_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 300
