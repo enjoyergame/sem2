@@ -80,9 +80,18 @@ if(P2P_BUILD_TESTS)
     add_executable(p2pcore_tests
         cpp/tests/test_protocol.cpp cpp/tests/test_bitfield.cpp
         cpp/tests/test_file_store.cpp cpp/tests/test_rate_limiter.cpp
-        cpp/tests/test_loopback.cpp)
+        cpp/tests/test_loopback.cpp
+        cpp/tests/test_vectors.cpp cpp/tests/golden_vectors.cpp)
     target_link_libraries(p2pcore_tests PRIVATE p2pcore_lib doctest::doctest_with_main)
-    target_compile_definitions(p2pcore_tests PRIVATE
-        P2P_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/frames.json")
+    set(P2P_VECTORS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/frames.json")
+    target_compile_definitions(p2pcore_tests PRIVATE P2P_VECTORS_PATH="${P2P_VECTORS_FILE}")
     add_test(NAME p2pcore_tests COMMAND p2pcore_tests)
+
+    # Генератор golden-векторов: перезаписывает tests/vectors/frames.json тем, что выдаёт кодек.
+    # Запускается вручную после намеренного изменения протокола; тест test_vectors.cpp
+    # проверяет, что файл в репозитории не разошёлся с кодеком.
+    add_executable(p2pcore_gen_vectors cpp/tools/gen_vectors.cpp cpp/tests/golden_vectors.cpp)
+    target_include_directories(p2pcore_gen_vectors PRIVATE cpp/tests)
+    target_link_libraries(p2pcore_gen_vectors PRIVATE p2pcore_lib)
+    target_compile_definitions(p2pcore_gen_vectors PRIVATE P2P_VECTORS_PATH="${P2P_VECTORS_FILE}")
 endif()

@@ -111,3 +111,49 @@ CRC нагрузки проверяется после её чтения; нес
 00 00 00 00 00 00 00 00  FF FF FF FF 00 00 00 00
 00 00 00 00 00 00 00 00
 ```
+
+## 6. Golden-векторы
+
+`tests/vectors/frames.json` — эталонные кадры, общие для C++ и Python. Файл строит кодек ядра
+(`p2pcore_gen_vectors`), C++-тест `cpp/tests/test_vectors.cpp` проверяет, что файл в репозитории
+совпадает с тем, что кодек выдаёт сейчас, а Python-тест `tests/test_protocol_vectors.py` разбирает
+те же байты независимо, через `struct`. Изменили формат кадра с одной стороны — один из тестов упадёт.
+
+Файл в UTF-8 (в Python: `json.loads(path.read_text(encoding="utf-8"))`), все hex-строки — в нижнем
+регистре без разделителей (`bytes.fromhex`). Три списка:
+
+**`frames`** — корректные кадры, по одному и более на каждый тип сообщения.
+
+| Поле          | Содержимое                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `name`        | уникальное имя вектора (удобно для `pytest.mark.parametrize`)                                |
+| `note`        | что именно проверяет вектор                                                                  |
+| `header`      | поля заголовка числами: `version`, `type`, `type_name`, `flags`, `file_id` (hex), `chunk_index`, `payload_len`, `payload_crc32c`, `seq` |
+| `payload`     | расшифровка нагрузки (см. ниже) или `null`                                                   |
+| `payload_hex` | нагрузка                                                                                     |
+| `frame_hex`   | кадр целиком: 40 байт заголовка + нагрузка                                                   |
+
+`payload` по типам: `HELLO` — `peer_id` (hex), `listen_port`, `caps`, `name`; `PING`/`PONG` —
+`timestamp_ns`; `BYE`/`REJECT` — `reason`, `reason_name`; `CONTROL` — `text`; `BITFIELD` —
+`bit_count`, `set_bits`; у `HAVE`/`REQUEST`/`CANCEL` (нагрузки нет) и `CHUNK` (сырые данные) — `null`.
+
+Что должен проверить тест: `frame_hex` разбирается в `header` и `payload_hex`; заголовок, собранный
+из полей `header`, даёт первые 40 байт `frame_hex`; `payload_crc32c` равен CRC32C нагрузки (0 для
+пустой); нагрузка, собранная из полей `payload`, равна `payload_hex`.
+
+**`header_checks`** — заголовок `header_hex` (40 байт) и `result`, который обязана вернуть проверка
+заголовка: `OK`, `BAD_MAGIC`, `BAD_VERSION`, `PAYLOAD_TOO_LARGE` или `UNKNOWN_TYPE`. Здесь же векторы
+на порядок проверок (неверно сразу несколько полей) и на границу `payload_len` = 16 МиБ.
+
+**`bad_payloads`** — нагрузка `payload_hex` неверной длины для типа `type` / `type_name`:
+декодер обязан её отвергнуть.
+
+**Как обновлять.** Вручную файл не правится. После намеренного изменения протокола:
+
+```
+cmake --build build --target p2pcore_gen_vectors
+build/p2pcore_gen_vectors
+```
+
+затем просмотреть `git diff tests/vectors/frames.json` (каждое изменившееся значение должно быть
+объяснимо) и обновить Python-тест. Новые векторы добавляются в `cpp/tests/golden_vectors.cpp`.
