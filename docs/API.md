@@ -4,9 +4,65 @@
 (`src/p2pshare/engine/fake_engine.py`), поэтому остальной Python-код не знает, с каким движком
 работает. Код: `cpp/include/p2pcore/engine.hpp`, привязки — `cpp/bindings/module.cpp`.
 
-## Сборка модуля без pip
+## Установка
 
-Для проверки ядра из Python до перехода `pyproject.toml` на scikit-build-core:
+`pip install` собирает C++ ядро сам (scikit-build-core вызывает CMake) и кладёт модуль
+`p2pshare/_p2pcore` рядом с Python-пакетом.
+
+**Что нужно:** Python ≥ 3.11, git (CMake скачивает Asio) и компилятор C++23 — один из двух:
+
+- **MinGW-w64 GCC 13+** с CMake и Ninja в `PATH` (например, MSYS2 UCRT64 или WinLibs). Модуль
+  собирается со статическим рантаймом C++ и зависит только от системных DLL и `python3XX.dll`.
+- **Visual Studio 2022 Build Tools** (нагрузка «Разработка классических приложений на C++»).
+  scikit-build-core находит Visual Studio сам; CMake и Ninja при необходимости ставит из PyPI.
+
+Если в `PATH` есть и то и другое, генератор выбирает CMake: CMake из MSYS2 по умолчанию берёт
+Ninja и GCC, CMake с python.org/PyPI — Visual Studio. Выбрать явно: `set CMAKE_GENERATOR=Ninja`
+(MinGW) перед `pip install`.
+
+**Пользователь** (собрать и запустить):
+
+```
+pip install .
+p2pshare
+```
+
+**Разработка** (editable: Python-код берётся из `src/`, C++ пересобирается при первом импорте
+после изменений):
+
+```
+pip install scikit-build-core pybind11 ninja
+pip install --no-build-isolation -Ceditable.rebuild=true -e ".[dev]"
+```
+
+Папка сборки — `build/<тег колеса>` (например, `build/cp314-cp314-win_amd64`); повторная
+сборка пересобирает только изменённое. Одну папку не стоит делить между двумя venv одной
+версии Python: последний `pip install` перенастраивает её под себя.
+
+**Без компилятора** — только Python-часть, приложение работает на `FakeEngine`:
+
+```
+set P2P_FAKE_ENGINE=1
+pip install -e ".[dev]"
+```
+
+С этой переменной CMake не запускается вовсе (колесо `py3-none-any`), а при запуске
+`create_engine()` выбирает `FakeEngine`. Это та же переменная, что и раньше.
+
+**Проверка установленного модуля:** `python cpp/tests/smoke_module.py` — два движка передают
+файл через 127.0.0.1. Её же запускает CI (`.github/workflows/package.yml`).
+
+## Сборка ядра без pip
+
+Для работы над самим ядром удобнее CMake напрямую. C++-тесты:
+
+```
+cmake -S . -B build/tests -G Ninja -DP2P_BUILD_TESTS=ON
+cmake --build build/tests
+ctest --test-dir build/tests --output-on-failure
+```
+
+Только Python-модуль, без pip:
 
 ```
 cmake -S . -B build/py -G Ninja -DP2P_BUILD_PYTHON=ON -DCMAKE_BUILD_TYPE=Release ^
@@ -14,11 +70,7 @@ cmake -S . -B build/py -G Ninja -DP2P_BUILD_PYTHON=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/py
 ```
 
-Получится `build/py/_p2pcore.cp3XX-win_amd64.pyd`. На MinGW он собирается со статическим
-рантаймом C++ и зависит только от системных DLL и `python3XX.dll`.
-
-C++-тесты: `cmake -S . -B build/tests -G Ninja -DP2P_BUILD_TESTS=ON`, затем
-`cmake --build build/tests` и `ctest --test-dir build/tests --output-on-failure`.
+Получится `build/py/_p2pcore.cp3XX-win_amd64.pyd`.
 
 ## Классы
 

@@ -1,0 +1,75 @@
+# Упаковка: pip install . собирает C++ ядро через scikit-build-core, и установленный модуль
+# p2pshare._p2pcore работает (cpp/tests/smoke_module.py). Так проверяется критерий этапа 4
+# «pip install . на чистой Windows собирает и запускает проект»: на windows-latest сборка
+# идёт через MSVC (Visual Studio), как у человека без MinGW.
+name: Python package
+
+on:
+  push:
+    branches: [main, development, "cpp/**"]
+    paths:
+      - "cpp/**"
+      - "CMakeLists.txt"
+      - "pyproject.toml"
+      - "src/**"
+      - ".github/workflows/package.yml"
+  pull_request:
+    paths:
+      - "cpp/**"
+      - "CMakeLists.txt"
+      - "pyproject.toml"
+      - "src/**"
+      - ".github/workflows/package.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: pip install / ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+        python: ["3.11", "3.14"]  # минимальная из requires-python и та, что у разработчиков
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Use GCC 14 on Linux
+        if: runner.os == 'Linux'
+        run: echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: pip install . (builds the C++ core)
+        run: python -m pip install -v .
+
+      - name: Smoke test of the installed module
+        run: python cpp/tests/smoke_module.py
+
+  # Сборка без компилятора: P2P_FAKE_ENGINE=1 — колесо из одной Python-части.
+  pure-python:
+    name: pip install with P2P_FAKE_ENGINE=1
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Build the wheel without CMake
+        env:
+          P2P_FAKE_ENGINE: "1"
+        run: |
+          python -m pip wheel --no-deps -w dist .
+          ls dist
+          test -f dist/p2pshare-0.1.0-py3-none-any.whl

@@ -1,9 +1,11 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.11", "pybind11>=3.0"]
+build-backend = "scikit_build_core.build"
 
-# Временная Python-only сборка: C++ ядро не компилируется.
-# Когда подключим настоящий _p2pcore, заменим backend на scikit-build-core (см. ARCHITECTURE.md, 4.2).
+# pip install . собирает C++ ядро (CMakeLists.txt) и кладёт модуль p2pshare/_p2pcore рядом
+# с Python-пакетом. Нужны компилятор C++23 (MinGW GCC 13+ или Visual Studio 2022), CMake ≥ 3.20
+# и git (CMake скачивает Asio). Без компилятора: P2P_FAKE_ENGINE=1 pip install -e ".[dev]" —
+# ставится только Python-часть, приложение работает на FakeEngine. Подробнее — docs/API.md.
 
 [project]
 name = "p2pshare"
@@ -21,8 +23,19 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-timeout", "ruff"]
 [project.scripts]
 p2pshare = "p2pshare.__main__:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+# Постоянная папка сборки: повторный pip install пересобирает только изменённое
+# и не скачивает Asio заново.
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/p2pshare"]
+
+# Сборка без C++: та же переменная, что выбирает FakeEngine при запуске.
+[[tool.scikit-build.overrides]]
+if.env.P2P_FAKE_ENGINE = true
+wheel.cmake = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

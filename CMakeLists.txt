@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# MSVC без /utf-8 читает исходники в кодовой странице системы (CP1251/CP1252), и кириллица
+# в u8"..." (тесты, пути) испортится. Ставим для всех целей, включая тесты и инструменты.
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+
 include(FetchContent)
 
 # --- standalone Asio (header-only, без Boost) ---
@@ -43,7 +47,7 @@ add_library(p2pcore_lib STATIC ${P2PCORE_SOURCES})
 target_include_directories(p2pcore_lib PUBLIC cpp/include)
 target_link_libraries(p2pcore_lib PUBLIC asio Threads::Threads)
 if(MSVC)
-    target_compile_options(p2pcore_lib PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(p2pcore_lib PRIVATE /W4 /permissive-)
 else()
     target_compile_options(p2pcore_lib PRIVATE -Wall -Wextra -Wpedantic)
 endif()

@@ -57,6 +57,23 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 300
 
+  # Windows MSVC: компилятор, которым обычно собирают Python-модули на «чистой» Windows
+  # (Visual Studio Build Tools). Многоконфигурационный генератор: конфигурация — при сборке.
+  windows-msvc:
+    name: Windows / MSVC
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DP2P_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 300
+
   # Linux: собирается file_store_posix.cpp (pread/pwrite/ftruncate) и сетевой код на epoll.
   # Второй вариант — Debug с AddressSanitizer + UndefinedBehaviorSanitizer: ловит выход за
   # границы буферов, use-after-free в обработчиках asio и UB, которые в Release не видны.
