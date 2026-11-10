@@ -25,6 +25,7 @@ find_package(Threads REQUIRED)
 
 # --- ядро: статическая библиотека, общая для модуля и тестов ---
 set(P2PCORE_SOURCES
+    cpp/src/errors.cpp
     cpp/src/protocol.cpp cpp/src/crc32c.cpp cpp/src/bitfield.cpp
     cpp/src/file_store.cpp cpp/src/rate_limiter.cpp cpp/src/event_queue.cpp
     cpp/src/connection.cpp cpp/src/engine.cpp)
