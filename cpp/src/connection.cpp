@@ -420,7 +420,7 @@ void Connection::start_chunk_job(ChunkJob job) {
     if (len == 0 || !entry.file.is_open()) return queue_reject(request, std::to_underlying(RejectReason::NotHave));
 
     if (host_.take_drop_fault(len)) {
-        finish(DisconnectCode::Fault, "fault injection: connection dropped", CloseMode::Abort, true);
+        finish(DisconnectCode::Fault, "fault injection: connection dropped", CloseMode::HalfClose, true);
         return;
     }
     const bool corrupt = host_.take_corrupt_fault(index);
@@ -607,18 +607,21 @@ void Connection::finish(DisconnectCode code, const std::string& reason, CloseMod
 
     host_.on_closed(*this, code, reason, was_ready && notify);
 
-    if (mode == CloseMode::SendBye && !socket_closed_) {
-        closing_gracefully_ = true;
+    if (mode == CloseMode::Abort || socket_closed_) return close_socket();
+
+    // Закрываем мягко: если закрыть сокет с непрочитанными входящими данными, ОС пошлёт RST,
+    // и собеседник может потерять то, что мы уже отправили (наш BYE или последний чанк).
+    closing_gracefully_ = true;
+    if (mode == CloseMode::SendBye) {
         FrameHeader h;
         h.type = MsgType::Bye;
         queue_frame(h, encode_reason(std::to_underlying(bye)));
-        close_timer_.expires_after(std::chrono::seconds(2));  // собеседник молчит — закрываем сами
-        close_timer_.async_wait([self = shared_from_this()](const asio::error_code& ec) {
-            if (!ec) self->close_socket();
-        });
-    } else {
-        close_socket();
     }
+    close_timer_.expires_after(std::chrono::seconds(2));  // собеседник молчит — закрываем сами
+    close_timer_.async_wait([self = shared_from_this()](const asio::error_code& ec) {
+        if (!ec) self->close_socket();
+    });
+    write_next();  // очередь пуста — сразу shutdown(send), иначе после последнего кадра
 }
 
 void Connection::close_socket() noexcept {

@@ -96,7 +96,9 @@ private:
         bool cancelled = false;  // отменён, ждём ответ (CHUNK или REJECT), чтобы освободить слот
     };
 
-    enum class CloseMode { Abort, SendBye };
+    // Abort — закрыть сокет сразу; SendBye — отправить BYE, закрыть свою половину (FIN) и
+    // дочитать вход; HalfClose — то же без BYE (имитация обрыва: уже отправленное дойдёт).
+    enum class CloseMode { Abort, SendBye, HalfClose };
 
     // --- чтение
     void read_header();

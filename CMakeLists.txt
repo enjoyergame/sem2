@@ -15,7 +15,11 @@ FetchContent_Declare(asio
 FetchContent_MakeAvailable(asio)   # своего CMakeLists у asio нет — просто скачается
 add_library(asio INTERFACE)
 target_include_directories(asio SYSTEM INTERFACE ${asio_SOURCE_DIR}/asio/include)
-target_compile_definitions(asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED)
+# ASIO_HAS_THREADS задаём явно: на MinGW asio узнаёт о потоках по _POSIX_THREADS, который
+# появляется только после <thread>/<pthread.h>. Тогда в файлах, где asio подключён первым,
+# мьютексы asio становятся пустыми заглушками, раскладка объектов расходится между .cpp
+# (нарушение ODR) — и с оптимизацией движок падает при первом же подключении.
+target_compile_definitions(asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED ASIO_HAS_THREADS=1)
 if(WIN32)
     target_compile_definitions(asio INTERFACE _WIN32_WINNT=0x0A00)  # Windows 10
     target_link_libraries(asio INTERFACE ws2_32 mswsock)
@@ -44,13 +48,24 @@ else()
     target_compile_options(p2pcore_lib PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# --- Python-модуль (собирается при pip install через scikit-build-core) ---
-if(SKBUILD)
+# --- Python-модуль ---
+# Через pip (scikit-build-core) собирается сам. Без pip, для проверки ядра из Python:
+#   cmake -S . -B build/py -G Ninja -DP2P_BUILD_PYTHON=ON -DPython_EXECUTABLE=<venv>/Scripts/python.exe
+#         -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+option(P2P_BUILD_PYTHON "Build the _p2pcore module without pip (local testing)" OFF)
+if(SKBUILD OR P2P_BUILD_PYTHON)
     find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
     find_package(pybind11 CONFIG REQUIRED)
     pybind11_add_module(_p2pcore MODULE cpp/bindings/module.cpp)
     target_link_libraries(_p2pcore PRIVATE p2pcore_lib)
-    install(TARGETS _p2pcore LIBRARY DESTINATION p2pshare)
+    if(MINGW)
+        # Python 3.8+ не ищет DLL зависимостей модуля в PATH: libstdc++/libgcc/winpthread
+        # вшиваем в .pyd статически, иначе import падает с "DLL load failed".
+        target_link_options(_p2pcore PRIVATE -static)
+    endif()
+    if(SKBUILD)
+        install(TARGETS _p2pcore LIBRARY DESTINATION p2pshare)
+    endif()
 endif()
 
 # --- C++-тесты: cmake -B build -DP2P_BUILD_TESTS=ON && cmake --build build && ctest --test-dir build ---
