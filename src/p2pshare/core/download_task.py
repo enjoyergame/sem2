@@ -5,7 +5,6 @@ import os
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from tempfile import mkstemp
 
 from p2pshare.core.connection_manager import Connection
 from p2pshare.core.piece_picker import SequentialPicker
@@ -14,12 +13,14 @@ from p2pshare.engine import P2PError
 from p2pshare.engine.events import Event, EventType
 from p2pshare.storage.bitfield import Bitfield
 from p2pshare.storage.manifest import Manifest
+from p2pshare.storage.paths import download_lock
+from p2pshare.storage.state_store import StateStore
 
 Progress = Callable[[int, int], None]
 
 
 async def finish_on_cancel(operation):
-    """Дождаться операции с .part перед закрытием файла и удалением."""
+    """Дождаться фоновой операции перед закрытием .part."""
     task = asyncio.create_task(operation)
     try:
         return await asyncio.shield(task)
@@ -48,52 +49,84 @@ class DownloadTask:
             self.events.put_nowait(event)
 
     async def run(self, target: Path, progress: Progress | None = None) -> Path:
-        if os.path.lexists(target):
-            raise FileExistsError(f"Файл уже существует: {target}")
+        work_dir = target.parent / ".p2pshare"
+        with download_lock(work_dir):
+            if os.path.lexists(target):
+                raise FileExistsError(f"Файл уже существует: {target}")
+            store = StateStore(work_dir / f"{self.manifest.file_id_hex}.part")
+            verifier = Verifier()
+            try:
+                return await self._run(target, store, verifier, progress)
+            finally:
+                verifier.close()
 
-        fd, temp_name = mkstemp(prefix=".p2pshare-", suffix=".part", dir=target.parent)
-        os.close(fd)
-        part = Path(temp_name)
-        verifier = Verifier()
-        have = Bitfield(self.manifest.chunk_count)
-        opened = False
+    async def _run(
+        self, target: Path, store: StateStore, verifier: Verifier, progress: Progress | None
+    ) -> Path:
+        part = store.part_path
+        if part.is_symlink() or (part.exists() and not part.is_file()):
+            raise ValueError(f"Некорректный временный файл: {part}")
 
+        have = await self._restore(store, verifier)
+        self.engine.open_download(
+            self.short_id, part, self.manifest.size, self.manifest.chunk_size, have.to_bytes()
+        )
         try:
-            self.engine.open_download(
-                self.short_id, part, self.manifest.size, self.manifest.chunk_size, have.to_bytes()
-            )
-            opened = True
-            await self._receive(part, have, verifier, progress)
+            await self._receive(store, have, verifier, progress)
             if not await finish_on_cancel(verifier.verify_file(part, self.manifest)):
                 raise P2PError("Итоговый SHA-256 файла не совпал")
-
+        except BaseException:
+            if self.pending:
+                with suppress(P2PError):
+                    self.engine.cancel_chunks(
+                        self.connection.conn_id, self.short_id, list(self.pending)
+                    )
+            # Если диск недоступен, следующий запуск перепроверит .part.
+            with suppress(OSError, P2PError):
+                await self._checkpoint(store, have)
+            raise
+        else:
             await finish_on_cancel(asyncio.to_thread(self.engine.flush, self.short_id))
-            self.engine.close_file(self.short_id)
-            opened = False
-
-            # Обе операции атомарно отклоняют уже существующее итоговое имя.
-            if os.name == "nt":
-                part.rename(target)
-            else:
-                os.link(part, target)
-            return target
         finally:
-            verifier.close()
-            if opened:
-                if self.pending:
-                    with suppress(P2PError):
-                        self.engine.cancel_chunks(
-                            self.connection.conn_id, self.short_id, list(self.pending)
-                        )
-                self.engine.close_file(self.short_id)
-            part.unlink(missing_ok=True)
+            self.engine.close_file(self.short_id)
+
+        # Обе операции атомарно отклоняют уже существующее итоговое имя.
+        if os.name == "nt":
+            part.rename(target)
+        else:
+            os.link(part, target)
+            part.unlink()
+        store.delete()
+        return target
+
+    async def _restore(self, store: StateStore, verifier: Verifier) -> Bitfield:
+        if not store.part_path.exists():
+            return Bitfield(self.manifest.chunk_count)
+
+        state = await asyncio.to_thread(store.load)
+        if (
+            state is not None
+            and state.file_id == self.manifest.file_id
+            and state.part_size == self.manifest.size
+            and store.matches_part(state)
+        ):
+            return state.have
+        return await finish_on_cancel(verifier.recheck(store.part_path, self.manifest))
+
+    async def _checkpoint(self, store: StateStore, have: Bitfield) -> None:
+        def save() -> None:
+            self.engine.flush(self.short_id)
+            store.save(self.manifest, have, [self.connection.peer_id.hex()])
+
+        await finish_on_cancel(asyncio.to_thread(save))
 
     async def _receive(
-        self, part: Path, have: Bitfield, verifier: Verifier, progress: Progress | None
+        self, store: StateStore, have: Bitfield, verifier: Verifier, progress: Progress | None
     ) -> None:
         picker = SequentialPicker()
         remote_have = Bitfield.full(self.manifest.chunk_count)
-        done = 0
+        done = sum(self.manifest.chunk_length(index) for index in have.indices())
+        verified_since_save = 0
         if progress is not None:
             progress(done, self.manifest.size)
 
@@ -120,11 +153,17 @@ class DownloadTask:
                 self.pending.remove(index)
                 if event.type == EventType.CHUNK_FAILED:
                     raise P2PError(f"Не удалось скачать чанк {index}, код {event.code}")
-                if not await finish_on_cancel(verifier.verify_chunk(part, self.manifest, index)):
+                if not await finish_on_cancel(
+                    verifier.verify_chunk(store.part_path, self.manifest, index)
+                ):
                     raise P2PError(f"SHA-256 чанка {index} не совпал")
 
                 have.set(index)
+                verified_since_save += 1
                 done += self.manifest.chunk_length(index)
 
+            if verified_since_save >= 30:
+                await self._checkpoint(store, have)
+                verified_since_save = 0
             if progress is not None:
                 progress(done, self.manifest.size)
