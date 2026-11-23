@@ -87,6 +87,28 @@ async def get_peer_file(args: argparse.Namespace) -> None:
     print(f"Сохранено: {target}")
 
 
+async def open_tui(args: argparse.Namespace) -> None:
+    from p2pshare.ui.tui.app import P2PApp
+
+    config = Config.load(args.data_dir, port=args.port, name=args.name)
+    async with AppCore(config) as core:
+        peers = PeerTable()
+        discovery = UdpDiscovery(
+            peers,
+            config.peer_id,
+            config.name,
+            core.port,
+            config.discovery_port,
+            lambda: len(core.catalog.items()),
+        )
+        app = P2PApp(core, peers, discovery)
+        try:
+            await discovery.start()
+            await app.run_async()
+        finally:
+            await app.stop_job()
+            await discovery.stop()
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="p2pshare")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -113,7 +135,10 @@ def main() -> int:
     get.add_argument("file_id")
     get.set_defaults(run=get_peer_file)
 
-    for command in (peers, ping, share, files, get):
+    tui = commands.add_parser("tui", help="Открыть терминальный интерфейс")
+    tui.set_defaults(run=open_tui)
+
+    for command in (peers, ping, share, files, get, tui):
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--port", type=int, default=0 if command in (ping, files, get) else None)
         command.add_argument("--name")
