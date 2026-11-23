@@ -3,9 +3,12 @@
 import asyncio
 
 from p2pshare.config import Config
+from p2pshare.core.catalog import Catalog
 from p2pshare.core.connection_manager import ConnectionManager
+from p2pshare.core.control_protocol import ControlProtocol
 from p2pshare.core.event_pump import pump_events
 from p2pshare.engine import create_engine
+from p2pshare.engine.events import Event
 
 
 class AppCore:
@@ -13,6 +16,8 @@ class AppCore:
         self.config = config
         self.engine = create_engine(config, fake=fake)
         self.connections = ConnectionManager(self.engine)
+        self.catalog = Catalog(self.engine)
+        self.control = ControlProtocol(self.engine, self.catalog)
         self.port = 0
         self._stopping = asyncio.Event()
         self._pump: asyncio.Task | None = None
@@ -20,9 +25,13 @@ class AppCore:
     async def __aenter__(self):
         self.port = self.engine.start(self.config.tcp_port)
         self._pump = asyncio.create_task(
-            pump_events(self.engine, self.connections.handle_event, self._stopping)
+            pump_events(self.engine, self.handle_event, self._stopping)
         )
         return self
+
+    def handle_event(self, event: Event) -> None:
+        self.connections.handle_event(event)
+        self.control.handle_event(event)
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         self._stopping.set()

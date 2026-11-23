@@ -50,6 +50,27 @@ async def ping_peer(args: argparse.Namespace) -> None:
         print(f"{name} ({host}:{port})  RTT: {rtt:.2f} мс")
 
 
+async def share_file(args: argparse.Namespace) -> None:
+    config = Config.load(args.data_dir, port=args.port, name=args.name)
+    async with AppCore(config) as app:
+        manifest = await app.catalog.share(args.path)
+        print(f"Раздаю {manifest.name} на TCP-порту {app.port}", flush=True)
+        print(f"ID файла: {manifest.file_id_hex}", flush=True)
+        await asyncio.Event().wait()
+
+
+async def list_peer_files(args: argparse.Namespace) -> None:
+    config = Config.load(args.data_dir, port=args.port, name=args.name)
+    async with AppCore(config) as app:
+        connection = await app.connections.connect(*args.address)
+        items = await app.control.list_files(connection.conn_id)
+        if not items:
+            print("У пира нет раздач.")
+        for item in items:
+            print(f"{item['file_id']}  {item['name']!r}  {item['size']} байт")
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="p2pshare")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -62,9 +83,18 @@ def main() -> int:
     ping.add_argument("address", type=parse_address, metavar="HOST:PORT")
     ping.set_defaults(run=ping_peer)
 
-    for command in (peers, ping):
+
+    share = commands.add_parser("share", help="Добавить файл в раздачу")
+    share.add_argument("path", type=Path)
+    share.set_defaults(run=share_file)
+
+    files = commands.add_parser("files", help="Получить список раздач пира")
+    files.add_argument("address", type=parse_address, metavar="HOST:PORT")
+    files.set_defaults(run=list_peer_files)
+
+    for command in (peers, ping, share, files):
         command.add_argument("--data-dir", type=Path)
-        command.add_argument("--port", type=int, default=0 if command is ping else None)
+        command.add_argument("--port", type=int, default=0 if command in (ping, files) else None)
         command.add_argument("--name")
 
     args = parser.parse_args()
