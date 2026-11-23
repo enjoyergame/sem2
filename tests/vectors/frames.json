@@ -1,0 +1,347 @@
+{
+  "protocol_version": 1,
+  "header_struct": ">IBBH16sIIII",
+  "generated_by": "p2pcore_gen_vectors (cpp/tools/gen_vectors.cpp); не править вручную",
+  "frames": [
+    {
+      "name": "hello",
+      "note": "Имя — UTF-8 (кириллица, 2 байта на букву), без завершающего нуля.",
+      "header": {
+        "version": 1,
+        "type": 1,
+        "type_name": "HELLO",
+        "flags": 0,
+        "file_id": "00000000000000000000000000000000",
+        "chunk_index": 4294967295,
+        "payload_len": 43,
+        "payload_crc32c": 3400283529,
+        "seq": 0
+      },
+      "payload": {"peer_id": "101112131415161718191a1b1c1d1e1f", "listen_port": 50505, "caps": 0, "name": "Ноутбук Ани"},
+      "payload_hex": "101112131415161718191a1b1c1d1e1fc54900000000d09dd0bed183d182d0b1d183d0ba20d090d0bdd0b8",
+      "frame_hex": "503250460101000000000000000000000000000000000000ffffffff0000002bcaac358900000000101112131415161718191a1b1c1d1e1fc54900000000d09dd0bed183d182d0b1d183d0ba20d090d0bdd0b8"
+    },
+    {
+      "name": "hello_empty_name",
+      "note": "Минимальная нагрузка HELLO: ровно 22 байта. caps проверяет порядок байт u32.",
+      "header": {
+        "version": 1,
+        "type": 1,
+        "type_name": "HELLO",
+        "flags": 0,
+        "file_id": "00000000000000000000000000000000",
+        "chunk_index": 4294967295,
+        "payload_len": 22,
+        "payload_crc32c": 2056860533,
+        "seq": 0
+      },
+      "payload": {"peer_id": "101112131415161718191a1b1c1d1e1f", "listen_port": 4660, "caps": 16909060, "name": ""},
+      "payload_hex": "101112131415161718191a1b1c1d1e1f123401020304",
+      "frame_hex": "503250460101000000000000000000000000000000000000ffffffff000000167a99337500000000101112131415161718191a1b1c1d1e1f123401020304"
+    },
+    {
+      "name": "ping",
+      "note": "Все 8 байт времени разные: видно порядок байт u64.",
+      "header": {
+        "version": 1,
+        "type": 2,
+        "type_name": "PING",
+        "flags": 0,
+        "file_id": "00000000000000000000000000000000",
+        "chunk_index": 4294967295,
+        "payload_len": 8,
+        "payload_crc32c": 1183391617,
+        "seq": 1
+      },
+      "payload": {"timestamp_ns": 72623859790382856},
+      "payload_hex": "0102030405060708",
+      "frame_hex": "503250460102000000000000000000000000000000000000ffffffff0000000846891f81000000010102030405060708"
+    },
+    {
+      "name": "pong",
+      "note": "Нагрузка — эхо PING: те же 8 байт, поэтому и CRC тот же.",
+      "header": {
+        "version": 1,
+        "type": 3,
+        "type_name": "PONG",
+        "flags": 0,
+        "file_id": "00000000000000000000000000000000",
+        "chunk_index": 4294967295,
+        "payload_len": 8,
+        "payload_crc32c": 1183391617,
+        "seq": 7
+      },
+      "payload": {"timestamp_ns": 72623859790382856},
+      "payload_hex": "0102030405060708",
+      "frame_hex": "503250460103000000000000000000000000000000000000ffffffff0000000846891f81000000070102030405060708"
+    },
+    {
+      "name": "bye_normal",
+      "note": "Штатное закрытие соединения.",
+      "header": {
+        "version": 1,
+        "type": 15,
+        "type_name": "BYE",
+        "flags": 0,
+        "file_id": "00000000000000000000000000000000",
+        "chunk_index": 4294967295,
+        "payload_len": 2,
+        "payload_crc32c": 51049681,
+        "seq": 42
+      },
+      "payload": {"reason": 1, "reason_name": "NORMAL"},
+      "payload_hex": "0001",
+      "frame_hex": "50325046010f000000000000000000000000000000000000ffffffff00000002030af4d10000002a0001"
+    },
+    {
+      "name": "control",
+      "note": "Нагрузка CONTROL для ядра — непрозрачные байты; смысл придаёт Python.",
+      "header": {
+        "version": 1,
+        "type": 16,
+        "type_name": "CONTROL",
+        "flags": 0,
+        "file_id": "00000000000000000000000000000000",
+        "chunk_index": 4294967295,
+        "payload_len": 15,
+        "payload_crc32c": 154588969,
+        "seq": 3
+      },
+      "payload": {"text": "{\"type\":\"list\"}"},
+      "payload_hex": "7b2274797065223a226c697374227d",
+      "frame_hex": "503250460110000000000000000000000000000000000000ffffffff0000000f0936d729000000037b2274797065223a226c697374227d"
+    },
+    {
+      "name": "bitfield",
+      "note": "10 чанков, есть 0, 1, 2 и 9. MSB-first: бит 0 — старший бит байта 0; 6 хвостовых бит равны 0.",
+      "header": {
+        "version": 1,
+        "type": 32,
+        "type_name": "BITFIELD",
+        "flags": 0,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 4294967295,
+        "payload_len": 2,
+        "payload_crc32c": 3410343313,
+        "seq": 4
+      },
+      "payload": {"bit_count": 10, "set_bits": [0, 1, 2, 9]},
+      "payload_hex": "e040",
+      "frame_hex": "5032504601200000a0a1a2a3a4a5a6a7a8a9aaabacadaeafffffffff00000002cb45b59100000004e040"
+    },
+    {
+      "name": "have",
+      "note": "Нагрузки нет: payload_len = 0 и payload_crc32c = 0.",
+      "header": {
+        "version": 1,
+        "type": 33,
+        "type_name": "HAVE",
+        "flags": 0,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 5,
+        "payload_len": 0,
+        "payload_crc32c": 0,
+        "seq": 5
+      },
+      "payload": null,
+      "payload_hex": "",
+      "frame_hex": "5032504601210000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000005000000000000000000000005"
+    },
+    {
+      "name": "request",
+      "note": "Запрос чанка 7.",
+      "header": {
+        "version": 1,
+        "type": 48,
+        "type_name": "REQUEST",
+        "flags": 0,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 7,
+        "payload_len": 0,
+        "payload_crc32c": 0,
+        "seq": 6
+      },
+      "payload": null,
+      "payload_hex": "",
+      "frame_hex": "5032504601300000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000007000000000000000000000006"
+    },
+    {
+      "name": "request_flags_ignored",
+      "note": "flags не ноль: получатель обязан принять кадр и флаги проигнорировать.",
+      "header": {
+        "version": 1,
+        "type": 48,
+        "type_name": "REQUEST",
+        "flags": 32769,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 16909060,
+        "payload_len": 0,
+        "payload_crc32c": 0,
+        "seq": 8
+      },
+      "payload": null,
+      "payload_hex": "",
+      "frame_hex": "5032504601308001a0a1a2a3a4a5a6a7a8a9aaabacadaeaf01020304000000000000000000000008"
+    },
+    {
+      "name": "chunk",
+      "note": "Ответ на REQUEST чанка 7. Нагрузка — сами данные (здесь 32 байта: i*7+3).",
+      "header": {
+        "version": 1,
+        "type": 49,
+        "type_name": "CHUNK",
+        "flags": 0,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 7,
+        "payload_len": 32,
+        "payload_crc32c": 1037471397,
+        "seq": 9
+      },
+      "payload": null,
+      "payload_hex": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc",
+      "frame_hex": "5032504601310000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000007000000203dd68ea500000009030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc"
+    },
+    {
+      "name": "reject_busy",
+      "note": "Отказ вместо CHUNK: очередь отдачи переполнена.",
+      "header": {
+        "version": 1,
+        "type": 50,
+        "type_name": "REJECT",
+        "flags": 0,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 7,
+        "payload_len": 2,
+        "payload_crc32c": 3794895910,
+        "seq": 10
+      },
+      "payload": {"reason": 3, "reason_name": "BUSY"},
+      "payload_hex": "0003",
+      "frame_hex": "5032504601320000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000700000002e23184260000000a0003"
+    },
+    {
+      "name": "cancel",
+      "note": "Отмена запроса чанка 7.",
+      "header": {
+        "version": 1,
+        "type": 51,
+        "type_name": "CANCEL",
+        "flags": 0,
+        "file_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "chunk_index": 7,
+        "payload_len": 0,
+        "payload_crc32c": 0,
+        "seq": 11
+      },
+      "payload": null,
+      "payload_hex": "",
+      "frame_hex": "5032504601330000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000700000000000000000000000b"
+    }
+  ],
+  "header_checks": [
+    {
+      "name": "default_ping_header",
+      "note": "Пример из PROTOCOL.md, раздел 5.",
+      "header_hex": "503250460102000000000000000000000000000000000000ffffffff000000000000000000000000",
+      "result": "OK"
+    },
+    {
+      "name": "flags_all_ones",
+      "note": "Любые флаги допустимы: получатель их игнорирует.",
+      "header_hex": "503250460130ffffa0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000001000000000000000000000002",
+      "result": "OK"
+    },
+    {
+      "name": "payload_len_max",
+      "note": "Ровно 16 МиБ — ещё допустимо.",
+      "header_hex": "5032504601310000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000000010000000000000000000000",
+      "result": "OK"
+    },
+    {
+      "name": "payload_too_large",
+      "note": "16 МиБ + 1 байт.",
+      "header_hex": "5032504601310000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000000010000010000000000000000",
+      "result": "PAYLOAD_TOO_LARGE"
+    },
+    {
+      "name": "bad_magic",
+      "note": "Испорчен последний байт magic.",
+      "header_hex": "503250580102000000000000000000000000000000000000ffffffff000000000000000000000000",
+      "result": "BAD_MAGIC"
+    },
+    {
+      "name": "bad_version",
+      "note": "Версия 2.",
+      "header_hex": "503250460202000000000000000000000000000000000000ffffffff000000000000000000000000",
+      "result": "BAD_VERSION"
+    },
+    {
+      "name": "unknown_type",
+      "note": "Типа 0x04 в таблице нет.",
+      "header_hex": "503250460104000000000000000000000000000000000000ffffffff000000000000000000000000",
+      "result": "UNKNOWN_TYPE"
+    },
+    {
+      "name": "bad_version_before_unknown_type",
+      "note": "Неверны и версия, и тип: сообщается версия.",
+      "header_hex": "503250460204000000000000000000000000000000000000ffffffff000000000000000000000000",
+      "result": "BAD_VERSION"
+    },
+    {
+      "name": "too_large_before_unknown_type",
+      "note": "Неверны и длина, и тип: сообщается длина.",
+      "header_hex": "503250460104000000000000000000000000000000000000ffffffff010000010000000000000000",
+      "result": "PAYLOAD_TOO_LARGE"
+    },
+    {
+      "name": "bad_magic_first",
+      "note": "Неверно всё сразу: сообщается magic.",
+      "header_hex": "003250460204000000000000000000000000000000000000ffffffff010000010000000000000000",
+      "result": "BAD_MAGIC"
+    }
+  ],
+  "bad_payloads": [
+    {
+      "name": "hello_too_short",
+      "note": "21 байт: на байт меньше обязательной части (22).",
+      "type": 1,
+      "type_name": "HELLO",
+      "payload_hex": "111111111111111111111111111111111111111111"
+    },
+    {
+      "name": "hello_name_too_long",
+      "note": "22 + 256 байт: имя длиннее 255 байт.",
+      "type": 1,
+      "type_name": "HELLO",
+      "payload_hex": "4141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141"
+    },
+    {
+      "name": "ping_too_short",
+      "note": "7 байт вместо 8.",
+      "type": 2,
+      "type_name": "PING",
+      "payload_hex": "22222222222222"
+    },
+    {
+      "name": "pong_too_long",
+      "note": "9 байт вместо 8.",
+      "type": 3,
+      "type_name": "PONG",
+      "payload_hex": "333333333333333333"
+    },
+    {
+      "name": "bye_empty",
+      "note": "0 байт вместо 2.",
+      "type": 15,
+      "type_name": "BYE",
+      "payload_hex": ""
+    },
+    {
+      "name": "reject_too_long",
+      "note": "3 байта вместо 2.",
+      "type": 50,
+      "type_name": "REJECT",
+      "payload_hex": "444444"
+    }
+  ]
+}

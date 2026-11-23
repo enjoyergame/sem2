@@ -1,0 +1,11 @@
+# Подавления ThreadSanitizer (CI: Linux / GCC TSan). Каждое — с объяснением, почему это не гонка.
+# Формат: https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
+
+# Исключение, переданное между потоками через std::promise / std::future.
+# Engine::connect: io-поток кладёт P2PError в promise (set_exception), поток Python получает
+# его из future.get() и читает what(). Объект исключения общий, у него атомарный счётчик ссылок;
+# удаляет его тот, кто отпустил последнюю ссылку, — часто io-поток, когда уничтожает ConnectOp.
+# Счётчик меняется внутри libstdc++.so, а системная libstdc++ собрана без TSan: синхронизацию
+# через этот счётчик TSan не видит и сообщает «data race» между чтением what() и удалением.
+# Подавляем только отчёты, где один из потоков освобождает exception_ptr.
+race:std::__exception_ptr::exception_ptr::_M_release
