@@ -1,7 +1,6 @@
 """Числовые коды в событиях (поле ``Event.code`` и ``Event.value``).
 
-ВНИМАНИЕ: это предложение Python-стороны. Перед подключением настоящего C++ ядра
-сверить значения с напарником и зафиксировать в ``docs/API.md``.
+Значения согласованы с C++ ядром (см. ``docs/API.md``).
 """
 
 # PEER_DISCONNECTED.code
@@ -16,6 +15,7 @@ FAIL_BUSY = 3
 FAIL_CRC = 4
 FAIL_DISCONNECT = 5
 FAIL_TIMEOUT = 6
+FAIL_DISK = 7  # не удалось записать в .part (есть только у настоящего ядра)
 
 # PROGRESS.value — направление передачи
 DIR_DOWNLOAD = 0
