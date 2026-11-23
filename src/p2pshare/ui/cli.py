@@ -6,6 +6,7 @@ from pathlib import Path
 
 from p2pshare.config import Config
 from p2pshare.core.app_core import AppCore
+from p2pshare.core.control_protocol import parse_file_id
 from p2pshare.discovery.peer_table import PeerTable
 from p2pshare.discovery.udp import UdpDiscovery
 
@@ -70,6 +71,21 @@ async def list_peer_files(args: argparse.Namespace) -> None:
             print(f"{item['file_id']}  {item['name']!r}  {item['size']} байт")
 
 
+async def get_peer_file(args: argparse.Namespace) -> None:
+    file_id = parse_file_id(args.file_id)
+    config = Config.load(args.data_dir, port=args.port, name=args.name)
+
+    def progress(done: int, total: int) -> None:
+        percent = 100 * done / total if total else 100
+        print(f"\r{percent:6.2f}%  {done}/{total} байт", end="", flush=True)
+
+    async with AppCore(config) as app:
+        try:
+            target = await app.download(*args.address, file_id, progress)
+        finally:
+            print()
+    print(f"Сохранено: {target}")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="p2pshare")
@@ -92,9 +108,14 @@ def main() -> int:
     files.add_argument("address", type=parse_address, metavar="HOST:PORT")
     files.set_defaults(run=list_peer_files)
 
-    for command in (peers, ping, share, files):
+    get = commands.add_parser("get", help="Скачать файл по его ID")
+    get.add_argument("address", type=parse_address, metavar="HOST:PORT")
+    get.add_argument("file_id")
+    get.set_defaults(run=get_peer_file)
+
+    for command in (peers, ping, share, files, get):
         command.add_argument("--data-dir", type=Path)
-        command.add_argument("--port", type=int, default=0 if command in (ping, files) else None)
+        command.add_argument("--port", type=int, default=0 if command in (ping, files, get) else None)
         command.add_argument("--name")
 
     args = parser.parse_args()
