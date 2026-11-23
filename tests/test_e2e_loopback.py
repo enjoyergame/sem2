@@ -46,3 +46,15 @@ async def test_list_files_and_get_manifest(tmp_path, fake):
 
         with pytest.raises(RuntimeError, match="unknown_file"):
             await client.control.get_manifest(conn_id, bytes(32))
+
+
+async def test_native_engine_uses_configured_rate_limits(tmp_path):
+    pytest.importorskip("p2pshare._p2pcore")
+    config = Config.load(tmp_path / "peer", port=0)
+    config.upload_limit_bps = 524288
+    config.download_limit_bps = 1048576
+
+    async with AppCore(config, fake=False) as app:
+        stats = app.engine.stats()
+        assert stats["upload_limit"] == 524288
+        assert stats["download_limit"] == 1048576

@@ -27,6 +27,11 @@ class AppCore:
         self._pump: asyncio.Task | None = None
 
     async def __aenter__(self):
+        upload = self.config.upload_limit_bps
+        download = self.config.download_limit_bps
+        if not (0 <= upload < 2**63 and 0 <= download < 2**63):
+            raise ValueError("Лимиты скорости должны быть неотрицательными числами байт/с")
+        self.engine.set_rate_limit(upload, download)
         self.port = self.engine.start(self.config.tcp_port)
         self._pump = asyncio.create_task(
             pump_events(self.engine, self.handle_event, self._stopping)
